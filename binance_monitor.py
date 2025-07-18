@@ -59,74 +59,91 @@ def save_seen_articles(seen_articles, filename="seen_articles.txt"):
 def get_binance_announcements():
     """Récupère les annonces Binance via l'API officielle"""
     try:
-        # Utiliser l'API Binance pour les annonces
+        # Méthode 1: API Binance officielle
         api_url = "https://www.binance.com/bapi/composite/v1/public/cms/article/catalog/list/query"
         
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Accept': 'application/json, text/plain, */*',
-            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Language': 'fr-FR,fr;q=0.9,en;q=0.8',
             'Content-Type': 'application/json',
             'Origin': 'https://www.binance.com',
             'Referer': 'https://www.binance.com/en/support/announcement/list/48'
         }
         
-        # Payload pour l'API
+        # Payload pour récupérer les annonces (catalogue 48 = Product Launch)
         payload = {
             "catalogId": 48,
             "pageNo": 1,
-            "pageSize": 20
+            "pageSize": 15
         }
         
         print(f"🔍 Récupération des annonces via API Binance...")
         response = requests.post(api_url, json=payload, headers=headers, timeout=30)
         
-        if response.status_code != 200:
-            print(f"❌ Erreur HTTP API: {response.status_code}")
-            # Fallback vers scraping simple
-            return get_binance_announcements_fallback()
-        
-        data = response.json()
-        
-        if data.get('code') == '000000' and 'data' in data:
-            articles = data['data'].get('articles', [])
-            print(f"✅ {len(articles)} articles récupérés via API")
-            return articles
+        if response.status_code == 200:
+            data = response.json()
+            
+            if data.get('code') == '000000' and 'data' in data:
+                articles = data['data'].get('articles', [])
+                print(f"✅ {len(articles)} articles récupérés via API")
+                return articles
+            else:
+                print(f"❌ Erreur API: {data.get('message', 'Code: ' + str(data.get('code')))}")
         else:
-            print(f"❌ Erreur API: {data.get('message', 'Erreur inconnue')}")
-            return get_binance_announcements_fallback()
+            print(f"❌ Erreur HTTP API: {response.status_code}")
+            
+        # Méthode 2: Fallback vers RSS
+        return get_binance_announcements_rss()
             
     except Exception as e:
         print(f"❌ Erreur API: {e}")
-        return get_binance_announcements_fallback()
+        return get_binance_announcements_rss()
 
-def get_binance_announcements_fallback():
-    """Méthode de fallback pour récupérer les annonces"""
+def get_binance_announcements_rss():
+    """Méthode de fallback via RSS"""
     try:
-        # Simuler quelques articles pour tester le système
-        print("🔄 Utilisation du mode fallback (simulation pour test)")
+        print("🔄 Tentative via RSS Binance...")
         
-        # En mode réel, vous pourriez essayer d'autres sources ou méthodes
-        # Pour le test, on simule des articles
-        fake_articles = [
-            {
-                'id': 'test_001',
-                'title': 'Test Article - Not Launchpool',
-                'releaseDate': datetime.now().timestamp() * 1000
-            },
-            {
-                'id': 'test_002', 
-                'title': 'Binance Launchpool Announces New Token ABC',
-                'releaseDate': datetime.now().timestamp() * 1000
-            }
-        ]
+        rss_url = "https://www.binance.com/en/rss/announcements"
         
-        # Retourner une liste vide en production pour éviter les faux positifs
-        return []
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'application/rss+xml, application/xml, text/xml'
+        }
         
+        response = requests.get(rss_url, headers=headers, timeout=30)
+        
+        if response.status_code == 200:
+            # Parse basique du XML RSS
+            content = response.text
+            
+            # Regex pour extraire les titres des articles
+            title_pattern = r'<title><!\[CDATA\[(.*?)\]\]></title>'
+            titles = re.findall(title_pattern, content)
+            
+            # Regex pour extraire les dates
+            date_pattern = r'<pubDate>(.*?)</pubDate>'
+            dates = re.findall(date_pattern, content)
+            
+            articles = []
+            for i, title in enumerate(titles):
+                if i > 0:  # Ignorer le premier titre (titre du feed)
+                    articles.append({
+                        'id': f"rss_{hash(title)}",
+                        'title': title.strip(),
+                        'releaseDate': datetime.now().timestamp() * 1000
+                    })
+            
+            print(f"✅ {len(articles)} articles récupérés via RSS")
+            return articles
+        else:
+            print(f"❌ Erreur RSS: {response.status_code}")
+            
     except Exception as e:
-        print(f"❌ Erreur fallback: {e}")
-        return []
+        print(f"❌ Erreur RSS: {e}")
+    
+    return []
 
 def check_new_articles():
     """Vérifie les nouveaux articles et envoie des alertes"""
