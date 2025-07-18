@@ -57,93 +57,124 @@ def save_seen_articles(seen_articles, filename="seen_articles.txt"):
         print(f"❌ Erreur sauvegarde: {e}")
 
 def get_binance_announcements():
-    """Récupère les annonces Binance via l'API officielle"""
+    """Récupère les annonces Binance par scraping direct de la page"""
     try:
-        # Méthode 1: API Binance officielle
-        api_url = "https://www.binance.com/bapi/composite/v1/public/cms/article/catalog/list/query"
+        url = "https://www.binance.com/en/support/announcement/list/48"
         
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'application/json, text/plain, */*',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
             'Accept-Language': 'fr-FR,fr;q=0.9,en;q=0.8',
-            'Content-Type': 'application/json',
-            'Origin': 'https://www.binance.com',
-            'Referer': 'https://www.binance.com/en/support/announcement/list/48'
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Cache-Control': 'max-age=0'
         }
         
-        # Payload pour récupérer les annonces (catalogue 48 = Product Launch)
-        payload = {
-            "catalogId": 48,
-            "pageNo": 1,
-            "pageSize": 15
-        }
+        print(f"🔍 Scraping direct de la page: {url}")
+        response = requests.get(url, headers=headers, timeout=30)
         
-        print(f"🔍 Récupération des annonces via API Binance...")
-        response = requests.post(api_url, json=payload, headers=headers, timeout=30)
+        if response.status_code != 200:
+            print(f"❌ Erreur HTTP: {response.status_code}")
+            return []
         
-        if response.status_code == 200:
-            data = response.json()
+        content = response.text
+        print(f"✅ Page récupérée ({len(content)} caractères)")
+        
+        # Parser le HTML pour extraire les articles
+        articles = []
+        
+        # Méthode 1: Chercher les liens avec les titres
+        # Pattern pour les liens d'annonces
+        link_pattern = r'<a[^>]*href="([^"]*announcement[^"]*)"[^>]*>([^<]*)</a>'
+        matches = re.findall(link_pattern, content, re.IGNORECASE)
+        
+        for href, title in matches:
+            if title.strip():  # Ignorer les liens vides
+                articles.append({
+                    'id': f"scrape_{hash(title.strip())}",
+                    'title': title.strip(),
+                    'href': href,
+                    'releaseDate': datetime.now().timestamp() * 1000
+                })
+        
+        # Méthode 2: Chercher dans le contenu JavaScript/JSON
+        if not articles:
+            print("🔄 Recherche dans les données JavaScript...")
             
-            if data.get('code') == '000000' and 'data' in data:
-                articles = data['data'].get('articles', [])
-                print(f"✅ {len(articles)} articles récupérés via API")
-                return articles
-            else:
-                print(f"❌ Erreur API: {data.get('message', 'Code: ' + str(data.get('code')))}")
-        else:
-            print(f"❌ Erreur HTTP API: {response.status_code}")
+            # Patterns pour extraire les données des scripts
+            json_patterns = [
+                r'window\.__APP_DATA\s*=\s*({.*?});',
+                r'window\.__INITIAL_STATE__\s*=\s*({.*?});',
+                r'"articles"\s*:\s*\[([^\]]*)\]',
+                r'"title"\s*:\s*"([^"]*)"'
+            ]
             
-        # Méthode 2: Fallback vers RSS
-        return get_binance_announcements_rss()
+            for pattern in json_patterns:
+                matches = re.findall(pattern, content, re.DOTALL)
+                if matches:
+                    print(f"✅ Trouvé {len(matches)} correspondances avec pattern")
+                    for match in matches:
+                        # Essayer d'extraire des titres
+                        if isinstance(match, str) and len(match) > 10:
+                            title_matches = re.findall(r'"title"\s*:\s*"([^"]*)"', match)
+                            for title in title_matches:
+                                if title.strip():
+                                    articles.append({
+                                        'id': f"json_{hash(title.strip())}",
+                                        'title': title.strip(),
+                                        'releaseDate': datetime.now().timestamp() * 1000
+                                    })
+                    break
+        
+        # Méthode 3: Recherche de patterns de titres spécifiques
+        if not articles:
+            print("🔄 Recherche de patterns spécifiques...")
             
+            # Patterns pour les titres contenant launchpool ou hodler
+            specific_patterns = [
+                r'([^<>]*launchpool[^<>]*)',
+                r'([^<>]*hodler[^<>]*)',
+                r'([^<>]*Launchpool[^<>]*)',
+                r'([^<>]*Hodler[^<>]*)'
+            ]
+            
+            for pattern in specific_patterns:
+                matches = re.findall(pattern, content, re.IGNORECASE)
+                for match in matches:
+                    clean_title = re.sub(r'["\',]', '', match.strip())
+                    if len(clean_title) > 10 and clean_title not in [a['title'] for a in articles]:
+                        articles.append({
+                            'id': f"pattern_{hash(clean_title)}",
+                            'title': clean_title,
+                            'releaseDate': datetime.now().timestamp() * 1000
+                        })
+        
+        # Nettoyer les doublons
+        seen_titles = set()
+        unique_articles = []
+        for article in articles:
+            title_lower = article['title'].lower()
+            if title_lower not in seen_titles:
+                seen_titles.add(title_lower)
+                unique_articles.append(article)
+        
+        print(f"✅ {len(unique_articles)} articles uniques extraits")
+        
+        # Afficher les titres trouvés pour debug
+        if unique_articles:
+            print("📋 Titres extraits:")
+            for article in unique_articles[:5]:  # Afficher les 5 premiers
+                print(f"  - {article['title']}")
+        
+        return unique_articles
+        
     except Exception as e:
-        print(f"❌ Erreur API: {e}")
-        return get_binance_announcements_rss()
-
-def get_binance_announcements_rss():
-    """Méthode de fallback via RSS"""
-    try:
-        print("🔄 Tentative via RSS Binance...")
-        
-        rss_url = "https://www.binance.com/en/rss/announcements"
-        
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'application/rss+xml, application/xml, text/xml'
-        }
-        
-        response = requests.get(rss_url, headers=headers, timeout=30)
-        
-        if response.status_code == 200:
-            # Parse basique du XML RSS
-            content = response.text
-            
-            # Regex pour extraire les titres des articles
-            title_pattern = r'<title><!\[CDATA\[(.*?)\]\]></title>'
-            titles = re.findall(title_pattern, content)
-            
-            # Regex pour extraire les dates
-            date_pattern = r'<pubDate>(.*?)</pubDate>'
-            dates = re.findall(date_pattern, content)
-            
-            articles = []
-            for i, title in enumerate(titles):
-                if i > 0:  # Ignorer le premier titre (titre du feed)
-                    articles.append({
-                        'id': f"rss_{hash(title)}",
-                        'title': title.strip(),
-                        'releaseDate': datetime.now().timestamp() * 1000
-                    })
-            
-            print(f"✅ {len(articles)} articles récupérés via RSS")
-            return articles
-        else:
-            print(f"❌ Erreur RSS: {response.status_code}")
-            
-    except Exception as e:
-        print(f"❌ Erreur RSS: {e}")
-    
-    return []
+        print(f"❌ Erreur lors du scraping: {e}")
+        return []
 
 def check_new_articles():
     """Vérifie les nouveaux articles et envoie des alertes"""
